@@ -1,22 +1,16 @@
-"""FastAPI app entry point and router registration."""
-
 from __future__ import annotations
 
 import logging
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-from .config import get_settings
 from .routes import admin, chat, status, report
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-settings = get_settings()
-
-origins = settings.allowed_origins
-logger.info("CORS allowed origins: %s", origins)
 
 app = FastAPI(title="Election Bot API")
 
@@ -27,6 +21,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    logger.error("Validation error: %s", exc.errors())
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 app.include_router(chat.router)
 app.include_router(status.router)
