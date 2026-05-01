@@ -61,7 +61,7 @@ async def _embed_query(query: str) -> List[float]:
     result = await loop.run_in_executor(
         None,
         lambda: genai.embed_content(
-            model="models/text-embedding-004",
+            model="text-embedding-004",
             content=query,
             task_type="RETRIEVAL_QUERY",
         ),
