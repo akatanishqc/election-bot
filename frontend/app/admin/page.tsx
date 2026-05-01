@@ -12,10 +12,9 @@ import type { BotMode } from "../../types";
  */
 export default function AdminDashboardPage() {
   const { stats, isLoading, error } = useAdmin();
-  const { status } = useBotStatus();
-  const [mode, setMode] = useState<BotMode>(status?.mode ?? "ACTIVE");
-
-  const currentMode = status?.mode ?? mode;
+  const status = useBotStatus();
+  const [mode, setMode] = useState<BotMode>(status?.bot_mode ?? "ACTIVE");
+  const currentMode = status?.bot_mode ?? mode;
 
   return (
     <main>
