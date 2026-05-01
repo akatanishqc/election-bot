@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from typing import List
 
-import google.generativeai as genai
+import httpx
 
-from ..dependencies import get_gemini_model, get_pinecone_index
+from ..dependencies import get_pinecone_index
 from ..prompts.system_prompt import (
     COMPLIANCE_FOOTER,
     FULL_SYSTEM_PROMPT,
@@ -21,6 +22,10 @@ SIMILARITY_THRESHOLD = 0.75
 TOP_K = 5
 PINECONE_NAMESPACE = "eci_docs"
 
+HF_API_URL = "https://api-inference.huggingface.co/models"
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+CHAT_MODEL = "deepseek-ai/DeepSeek-V3"
+
 
 @dataclass
 class RagResult:
@@ -29,11 +34,11 @@ class RagResult:
     was_refused: bool = False
 
 
+def _get_hf_headers() -> dict:
+    return {"Authorization": f"Bearer {os.environ.get('HUGGINGFACE_API_KEY', '')}"}
+
+
 async def process_query(query: str, language: str, bot_mode: str) -> RagResult:
-    """
-    Main entry point. Embeds the query, retrieves context from Pinecone,
-    calls Gemini, and returns a structured result.
-    """
     if bot_mode == "PAUSED":
         return RagResult(reply=PAUSED_MESSAGE, was_refused=True)
 
@@ -56,24 +61,22 @@ async def process_query(query: str, language: str, bot_mode: str) -> RagResult:
 
 
 async def _embed_query(query: str) -> List[float]:
-    """Generates a query embedding using text-embedding-004."""
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: genai.embed_content(
-            model="text-embedding-004",
-            content=query,
-            task_type="RETRIEVAL_QUERY",
-        ),
-    )
-    return result["embedding"]
+    """Generates embedding using HuggingFace sentence-transformers."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"{HF_API_URL}/{EMBED_MODEL}",
+            headers=_get_hf_headers(),
+            json={"inputs": query},
+        )
+        response.raise_for_status()
+        result = response.json()
+        # Returns list of embeddings — take first
+        if isinstance(result[0], list):
+            return result[0]
+        return result
 
 
 async def retrieve_context(query_embedding: List[float]) -> List[dict]:
-    """
-    Queries Pinecone for the top-K most similar chunks.
-    Returns list of dicts sorted by score descending.
-    """
     index = get_pinecone_index()
     loop = asyncio.get_event_loop()
 
@@ -90,20 +93,17 @@ async def retrieve_context(query_embedding: List[float]) -> List[dict]:
     chunks = []
     for match in response.matches:
         meta = match.metadata or {}
-        chunks.append(
-            {
-                "text": meta.get("text", ""),
-                "score": match.score,
-                "source_doc": meta.get("source_doc", "ECI Document"),
-                "section": meta.get("section", ""),
-                "page": meta.get("page", 0),
-            }
-        )
+        chunks.append({
+            "text": meta.get("text", ""),
+            "score": match.score,
+            "source_doc": meta.get("source_doc", "ECI Document"),
+            "section": meta.get("section", ""),
+            "page": meta.get("page", 0),
+        })
     return sorted(chunks, key=lambda c: c["score"], reverse=True)
 
 
 def build_context_string(chunks: List[dict]) -> str:
-    """Formats retrieved chunks into a labelled context block for the LLM."""
     parts = []
     for i, chunk in enumerate(chunks, start=1):
         header = (
@@ -115,10 +115,7 @@ def build_context_string(chunks: List[dict]) -> str:
 
 
 async def call_llm(context: str, query: str, bot_mode: str) -> str:
-    """
-    Calls Gemini 2.5 Flash-Lite with the appropriate system prompt.
-    temperature=0.0 is set at model init in dependencies.py.
-    """
+    """Calls DeepSeek-V3 via HuggingFace Inference API."""
     system_prompt = (
         RESTRICTED_SYSTEM_PROMPT if bot_mode == "RESTRICTED" else FULL_SYSTEM_PROMPT
     )
@@ -129,17 +126,27 @@ async def call_llm(context: str, query: str, bot_mode: str) -> str:
         f"[USER QUERY]\n{query}"
     )
 
-    model = get_gemini_model()
-    loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(
-        None,
-        lambda: model.generate_content(full_prompt),
-    )
-    return response.text.strip()
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            f"{HF_API_URL}/{CHAT_MODEL}",
+            headers=_get_hf_headers(),
+            json={
+                "inputs": full_prompt,
+                "parameters": {
+                    "max_new_tokens": 512,
+                    "temperature": 0.1,
+                    "return_full_text": False,
+                }
+            },
+        )
+        response.raise_for_status()
+        result = response.json()
+        if isinstance(result, list):
+            return result[0].get("generated_text", "").strip()
+        return str(result).strip()
 
 
 def append_compliance_footer(response: str, sources: List[dict]) -> str:
-    """Appends the mandatory ECI compliance footer to every response."""
     if not sources:
         source_str = "ECI official documents"
     else:

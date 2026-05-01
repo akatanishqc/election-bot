@@ -1,18 +1,11 @@
-"""Language detection and translation via langdetect + Gemini.
-
-Translation calls count against the 1,000 RPD free tier limit.
-Each non-English query consumes up to 2 extra LLM calls (query + response).
-Monitor daily usage in Google AI Studio.
-"""
+"""Language detection and translation via langdetect + HuggingFace."""
 
 from __future__ import annotations
 
-import asyncio
+import os
 
-import google.generativeai as genai
+import httpx
 from langdetect import LangDetectException, detect
-
-from ..dependencies import get_gemini_model
 
 SUPPORTED_LANGUAGES: dict[str, str] = {
     "en": "English",
@@ -26,13 +19,14 @@ SUPPORTED_LANGUAGES: dict[str, str] = {
 
 _FALLBACK = "en"
 _MIN_DETECT_LENGTH = 10
+_HF_URL = "https://api-inference.huggingface.co/models/deepseek-ai/DeepSeek-V3"
+
+
+def _get_headers() -> dict:
+    return {"Authorization": f"Bearer {os.environ.get('HUGGINGFACE_API_KEY', '')}"}
 
 
 def detect_language(text: str) -> str:
-    """
-    Detects language using langdetect. Returns ISO 639-1 code.
-    Falls back to 'en' if text is too short, language is unsupported, or on any error.
-    """
     if len(text.strip()) < _MIN_DETECT_LENGTH:
         return _FALLBACK
     try:
@@ -45,13 +39,8 @@ def detect_language(text: str) -> str:
 
 
 async def translate_to_english(text: str, source_lang: str) -> str:
-    """
-    Translates text to English. Returns unchanged text if already English.
-    On any failure, returns original text (graceful degradation).
-    """
     if source_lang == "en":
         return text
-
     lang_name = SUPPORTED_LANGUAGES.get(source_lang, source_lang)
     prompt = (
         f"Translate the following {lang_name} text to English.\n"
@@ -59,22 +48,15 @@ async def translate_to_english(text: str, source_lang: str) -> str:
         f"{text}"
     )
     try:
-        return await _gemini_translate(prompt)
+        return await _hf_translate(prompt)
     except Exception:  # noqa: BLE001
         return text
 
 
 async def translate_from_english(text: str, target_lang: str) -> str:
-    """
-    Translates an English response to the target language.
-    - Preserves source citations (lines containing 'Source:') exactly.
-    - Preserves the compliance footer ([AI-Generated] block) exactly.
-    - Falls back to English + notice on any failure.
-    """
     if target_lang == "en":
         return text
 
-    # Split off the footer to protect it from translation
     footer_marker = "\n\n---\n"
     if footer_marker in text:
         body, footer = text.split(footer_marker, 1)
@@ -92,18 +74,27 @@ async def translate_from_english(text: str, target_lang: str) -> str:
         f"{body}"
     )
     try:
-        translated_body = await _gemini_translate(prompt)
+        translated_body = await _hf_translate(prompt)
         return translated_body + footer
     except Exception:  # noqa: BLE001
         return text + "\n[Translation unavailable]"
 
 
-async def _gemini_translate(prompt: str) -> str:
-    """Runs a translation prompt through Gemini 2.5 Flash-Lite."""
-    model = get_gemini_model()
-    loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(
-        None,
-        lambda: model.generate_content(prompt),
-    )
-    return response.text.strip()
+async def _hf_translate(prompt: str) -> str:
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            _HF_URL,
+            headers=_get_headers(),
+            json={
+                "inputs": prompt,
+                "parameters": {
+                    "max_new_tokens": 256,
+                    "return_full_text": False,
+                },
+            },
+        )
+        response.raise_for_status()
+        result = response.json()
+        if isinstance(result, list):
+            return result[0].get("generated_text", "").strip()
+        return str(result).strip()
