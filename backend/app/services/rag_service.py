@@ -61,16 +61,16 @@ async def process_query(query: str, language: str, bot_mode: str) -> RagResult:
 
 
 async def _embed_query(query: str) -> List[float]:
-    """Generates embedding using HuggingFace sentence-transformers."""
+    """Generates embedding using HuggingFace feature-extraction pipeline."""
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
-            f"{HF_API_URL}/{EMBED_MODEL}",
+            "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2",
             headers=_get_hf_headers(),
             json={"inputs": query},
         )
         response.raise_for_status()
         result = response.json()
-        # Returns list of embeddings — take first
+        # Returns nested list — flatten if needed
         if isinstance(result[0], list):
             return result[0]
         return result
