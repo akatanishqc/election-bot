@@ -67,7 +67,7 @@ yarn-error.log*
 .yarn/install-state.gz
 
 # ── ECI Documents (may be large PDFs) ──
-backend/eci_docs/
+backend/ingestion/eci_docs/
 ingestion/failed_chunks.jsonl
 
 # ── OS files ──
@@ -107,3 +107,8 @@ pip-delete-this-directory.txt
 *.tmp
 *.temp
 .cache/
+
+# Firebase
+.firebase/
+firebase-debug.log
+firebaseapp-debug.log
