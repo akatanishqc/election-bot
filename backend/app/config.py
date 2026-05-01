@@ -16,7 +16,11 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     admin_secret_token: str = ""
     bot_mode: str = "ACTIVE"
-    allowed_origins: List[str] = ["http://localhost:3000"]
+    allowed_origins_raw: str = "http://localhost:3000"
+
+    @property
+    def allowed_origins(self) -> List[str]:
+        return [o.strip() for o in self.allowed_origins_raw.split(",")]
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
