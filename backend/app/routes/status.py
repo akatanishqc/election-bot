@@ -1,4 +1,7 @@
 """Pydantic request and response models."""
+from fastapi import APIRouter
+
+router = APIRouter()
 
 from __future__ import annotations
 
