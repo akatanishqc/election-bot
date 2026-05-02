@@ -1,7 +1,7 @@
 # ECI Election Information Bot
 
 A RAG-based web app that answers Indian voter queries using official ECI documents.
-Built at ₹0 using Gemini 2.5 Flash-Lite, Pinecone, Supabase, Next.js 14, and FastAPI.
+Built at ₹0 using HuggingFace (DeepSeek-V3 + MiniLM), Pinecone, Supabase, Next.js 14, and FastAPI.
 
 ---
 
@@ -9,25 +9,25 @@ Built at ₹0 using Gemini 2.5 Flash-Lite, Pinecone, Supabase, Next.js 14, and F
 
 ```
 election-bot/
-├── frontend/   → Next.js 14 (deploy to Vercel)
+├── frontend/   → Next.js 14 (deploy to Firebase Hosting)
 └── backend/    → Python FastAPI (deploy to Render)
 ```
 
-**Flow:** User sends a question → FastAPI embeds it → queries Pinecone for relevant ECI document chunks → Gemini generates a grounded answer → response returned to the chat UI.
+**Flow:** User sends a question → FastAPI embeds it locally (MiniLM) → queries Pinecone for relevant ECI document chunks → DeepSeek-V3 generates a grounded answer → response returned to the chat UI.
 
 ---
 
 ## Tech Stack
 
-| Layer      | Technology                           | Cost                            |
-| ---------- | ------------------------------------ | ------------------------------- |
-| Frontend   | Next.js 14, TypeScript, Tailwind CSS | ₹0 (Vercel free)                |
-| Backend    | Python FastAPI, LangChain            | ₹0 (Render free)                |
-| LLM        | Gemini 2.5 Flash-Lite                | ₹0 (Google AI Studio free tier) |
-| Embeddings | Google text-embedding-004            | ₹0 (free tier)                  |
-| Vector DB  | Pinecone Serverless                  | ₹0 (1 index free)               |
-| Database   | Supabase                             | ₹0 (500MB free)                 |
-| Hosting    | Vercel + Render                      | ₹0 (both free tier)             |
+| Layer      | Technology                                     | Cost                |
+| ---------- | ---------------------------------------------- | ------------------- |
+| Frontend   | Next.js 14, TypeScript, Tailwind CSS           | ₹0 (Firebase free)  |
+| Backend    | Python FastAPI                                 | ₹0 (Render free)    |
+| LLM        | DeepSeek-V3 via HuggingFace Inference API      | ₹0 (free tier)      |
+| Embeddings | sentence-transformers/all-MiniLM-L6-v2 (local) | ₹0                  |
+| Vector DB  | Pinecone Serverless (384 dimensions, cosine)   | ₹0 (1 index free)   |
+| Database   | Supabase                                       | ₹0 (500MB free)     |
+| Hosting    | Firebase Hosting + Render                      | ₹0 (both free tier) |
 
 ---
 
@@ -35,9 +35,10 @@ election-bot/
 
 - Python 3.11+
 - Node.js 18+
-- A Google AI Studio account → [aistudio.google.com](https://aistudio.google.com)
+- A HuggingFace account → [huggingface.co](https://huggingface.co)
 - A Pinecone account → [pinecone.io](https://pinecone.io)
 - A Supabase account → [supabase.com](https://supabase.com)
+- Firebase CLI → `npm install -g firebase-tools`
 
 ---
 
@@ -46,7 +47,7 @@ election-bot/
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/your-username/election-bot.git
+git clone https://github.com/akatanishqc/election-bot.git
 cd election-bot
 ```
 
@@ -54,22 +55,12 @@ cd election-bot
 
 ```bash
 cd backend
-
-# Create and activate virtual environment
 python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# macOS / Linux
-source .venv/bin/activate
-
-# Install dependencies
+.venv\Scripts\activate      # Windows
+source .venv/bin/activate   # macOS / Linux
 pip install -r requirements.txt
-
-# Create environment file
 cp .env.example .env
-# Fill in your keys in .env (see Environment Variables section below)
+# Fill in your keys in .env
 ```
 
 ### 3. Frontend setup
@@ -77,16 +68,15 @@ cp .env.example .env
 ```bash
 cd frontend
 npm install
-cp .env.local.example .env.local
-# Set NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 in .env.local
+# Create .env.local — set NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
 ### 4. Supabase table setup
 
-Run this SQL once in your Supabase SQL editor:
+Run this in Supabase → SQL Editor:
 
 ```sql
-CREATE TABLE interaction_logs (
+CREATE TABLE IF NOT EXISTS interaction_logs (
     id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     created_at    TIMESTAMPTZ DEFAULT NOW(),
     session_id    TEXT NOT NULL,
@@ -101,31 +91,39 @@ CREATE TABLE interaction_logs (
     user_agent    TEXT
 );
 
-CREATE TABLE mode_change_log (
+CREATE TABLE IF NOT EXISTS mode_change_log (
     id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     mode       TEXT NOT NULL,
     changed_at TIMESTAMPTZ NOT NULL
 );
 ```
 
-### 5. Ingest ECI documents
+### 5. Pinecone index setup
 
-Place your ECI PDF files in `backend/eci_docs/`, then run:
+Create an index with:
+
+- **Name:** `election-bot`
+- **Dimensions:** `384`
+- **Metric:** `cosine`
+- **Type:** Serverless (AWS, us-east-1)
+
+### 6. Ingest ECI documents
+
+> **Windows users:** Run ingestion on Google Colab due to a numpy/torch incompatibility.
+> See the Ingestion section below.
 
 ```bash
 cd backend
-python ingestion/ingest.py --docs ./eci_docs/
+python ingestion/ingest.py --docs ./ingestion/eci_docs/
 ```
 
-This embeds all PDFs and uploads them to Pinecone. Run once before starting the server.
-
-### 6. Start both servers
+### 7. Start both servers
 
 **Terminal 1 — Backend:**
 
 ```bash
 cd backend
-.venv\Scripts\activate   # Windows
+.venv\Scripts\activate
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -145,14 +143,14 @@ Open [http://localhost:3000/chat](http://localhost:3000/chat)
 ### backend/.env
 
 ```env
-GEMINI_API_KEY=           # From Google AI Studio
-PINECONE_API_KEY=         # From Pinecone console
+PINECONE_API_KEY=
 PINECONE_INDEX_NAME=election-bot
-SUPABASE_URL=             # From Supabase project settings
-SUPABASE_ANON_KEY=        # From Supabase project settings
-ADMIN_SECRET_TOKEN=       # Any random string, min 32 characters
-BOT_MODE=ACTIVE           # ACTIVE | RESTRICTED | PAUSED
-ALLOWED_ORIGINS=http://localhost:3000
+SUPABASE_URL=               # Supabase Project Settings → General
+SUPABASE_ANON_KEY=          # Supabase Project Settings → API → Legacy anon key
+HUGGINGFACE_API_KEY=        # HuggingFace → Settings → Access Tokens (Inference permission)
+ADMIN_SECRET_TOKEN=         # Any random string, min 32 characters
+BOT_MODE=ACTIVE
+ALLOWED_ORIGINS_RAW=http://localhost:3000,https://your-firebase-app.web.app
 ```
 
 ### frontend/.env.local
@@ -163,66 +161,91 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 
 ---
 
+## Ingestion (PDF → Pinecone)
+
+The embedding model requires PyTorch which conflicts with numpy on Windows.
+Run ingestion on **Google Colab**:
+
+1. Go to [colab.research.google.com](https://colab.research.google.com)
+2. Install:
+
+```python
+!pip uninstall pinecone-client -y
+!pip install sentence-transformers pinecone pypdf langdetect langchain-text-splitters python-dotenv
+```
+
+3. Upload `ingest.py`, `chunker.py`, and your PDFs
+4. Run:
+
+```python
+import subprocess, os
+env = os.environ.copy()
+env["PINECONE_API_KEY"] = "your_pinecone_key"
+env["PINECONE_INDEX_NAME"] = "election-bot"
+result = subprocess.run(
+    ["python3", "ingest.py", "--docs", "./"],
+    capture_output=True, text=True, env=env
+)
+print(result.stdout)
+print(result.stderr)
+```
+
+For adding new documents later, use `--incremental` to skip already-ingested vectors.
+
+---
+
 ## Deployment
 
 ### Backend → Render
 
 1. Push repo to GitHub
-2. Go to [render.com](https://render.com) → New → Web Service
-3. Connect your GitHub repo, set **Root Directory** to `backend`
-4. Build command: `pip install -r requirements.txt`
-5. Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-6. Add all env vars from `backend/.env` in the Render dashboard
-7. Update `ALLOWED_ORIGINS` to include your Vercel URL once deployed
+2. Render → New Web Service → Root Directory: `backend`
+3. Build: `pip install -r requirements.txt`
+4. Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+5. Add all env vars from `backend/.env`
+6. `backend/runtime.txt` must contain `3.11.9` (forces Python 3.11)
 
-### Frontend → Vercel
+### Frontend → Firebase Hosting
 
-1. Go to [vercel.com](https://vercel.com) → New Project
-2. Import your GitHub repo, set **Root Directory** to `frontend`
-3. Add env var: `NEXT_PUBLIC_API_BASE_URL` = your Render backend URL
-4. Deploy
+```bash
+cd frontend
+npm run build
+firebase deploy
+```
+
+Update `ALLOWED_ORIGINS_RAW` on Render to include your Firebase URL after deploying.
 
 ### Keep Render awake (free tier)
 
-Set up [UptimeRobot](https://uptimerobot.com) (free) to ping your Render URL every 10 minutes:
+Set up [UptimeRobot](https://uptimerobot.com) to ping every 10 minutes:
 
-- Monitor type: HTTP(S)
 - URL: `https://your-render-url.onrender.com/api/status`
-- Interval: 10 minutes
 
 ---
 
 ## Bot Modes
 
-The bot has three operating modes, controllable from the admin dashboard at `/admin`:
+| Mode         | Behaviour                                                                   |
+| ------------ | --------------------------------------------------------------------------- |
+| `ACTIVE`     | Fully operational. Answers all ECI-document-grounded queries.               |
+| `RESTRICTED` | 48-hour silence period. Only polling station queries allowed (Section 126). |
+| `PAUSED`     | Emergency shutdown. All users receive a maintenance message.                |
 
-| Mode         | Behaviour                                                                                       |
-| ------------ | ----------------------------------------------------------------------------------------------- |
-| `ACTIVE`     | Fully operational. Answers all ECI-document-grounded queries.                                   |
-| `RESTRICTED` | 48-hour pre-poll silence period. Only polling station queries allowed (Section 126 compliance). |
-| `PAUSED`     | Emergency shutdown. All users receive a maintenance message.                                    |
+### ECI 3-Hour Kill Switch
 
-### ECI 3-Hour Kill Switch Procedure
-
-If a misinformation report is received, you have 3 hours to act:
-
-1. **T+0 min** — Go to `/admin` → change mode to `PAUSED`
-2. **T+30 min** — Check Admin → Logs → filter Flagged=ON → identify the bad chunk
-3. **T+90 min** — Delete or re-ingest the problematic document:
-   ```bash
-   python ingestion/ingest.py --docs ./eci_docs/corrected_file.pdf --incremental
-   ```
-4. **T+180 min** — Test with 3 queries → change mode back to `ACTIVE`
+1. **T+0** — `/admin` → change mode to `PAUSED`
+2. **T+30** — Logs → filter Flagged=ON → identify bad chunk
+3. **T+90** — Re-ingest corrected document on Colab with `--incremental`
+4. **T+180** — Test → change mode back to `ACTIVE`
 
 ---
 
 ## Compliance
 
 - **ECI March 2026 Advisory** — 3-hour takedown rule, AI-generated label on all responses
-- **Section 126, Representation of the People Act** — 48-hour silence period enforced via RESTRICTED mode
-- **Meta January 2026 Policy** — Domain-specific civic tool (not a general-purpose AI chatbot)
+- **Section 126, RPA** — 48-hour silence period enforced via RESTRICTED mode
 - **90-day interaction log** — Stored in Supabase, auto-deleted after 90 days
-- **No PII stored** — Session IDs are client-generated UUIDs, no phone numbers or personal data
+- **No PII stored** — Session IDs are client-generated UUIDs only
 
 ---
 
@@ -230,7 +253,6 @@ If a misinformation report is received, you have 3 hours to act:
 
 ```
 election-bot/
-│
 ├── frontend/
 │   ├── app/
 │   │   ├── globals.css
@@ -244,8 +266,7 @@ election-bot/
 │   │   │   ├── InputBar.tsx
 │   │   │   ├── SourceCitation.tsx
 │   │   │   ├── SuggestedQueries.tsx
-│   │   │   ├── LanguagePicker.tsx
-│   │   │   └── LoadingDots.tsx (in shared/)
+│   │   │   └── LanguagePicker.tsx
 │   │   └── shared/
 │   │       ├── Header.tsx
 │   │       ├── Footer.tsx
@@ -279,7 +300,8 @@ election-bot/
     ├── ingestion/
     │   ├── ingest.py
     │   └── chunker.py
-    └── requirements.txt
+    ├── requirements.txt
+    └── runtime.txt
 ```
 
 ---
@@ -287,8 +309,6 @@ election-bot/
 ## Supported Languages
 
 English · हिन्दी · বাংলা · தமிழ் · తెలుగు · മലയാളം · অসমীয়া
-
-Language is auto-detected from the user's query. Responses are returned in the same language.
 
 ---
 
