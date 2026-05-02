@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 import httpx
+from sentence_transformers import SentenceTransformer
 
 from ..dependencies import get_pinecone_index
 from ..prompts.system_prompt import (
@@ -21,10 +22,20 @@ from ..prompts.system_prompt import (
 SIMILARITY_THRESHOLD = 0.75
 TOP_K = 5
 PINECONE_NAMESPACE = "eci_docs"
-
-HF_API_URL = "https://api-inference.huggingface.co/models"
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 CHAT_MODEL = "deepseek-ai/DeepSeek-V3"
+
+_embed_model: SentenceTransformer | None = None
+
+
+def _get_embed_model() -> SentenceTransformer:
+    global _embed_model
+    if _embed_model is None:
+        _embed_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    return _embed_model
+
+
+def _get_hf_headers() -> dict:
+    return {"Authorization": f"Bearer {os.environ.get('HUGGINGFACE_API_KEY', '')}"}
 
 
 @dataclass
@@ -32,10 +43,6 @@ class RagResult:
     reply: str
     sources: List[dict] = field(default_factory=list)
     was_refused: bool = False
-
-
-def _get_hf_headers() -> dict:
-    return {"Authorization": f"Bearer {os.environ.get('HUGGINGFACE_API_KEY', '')}"}
 
 
 async def process_query(query: str, language: str, bot_mode: str) -> RagResult:
@@ -61,19 +68,14 @@ async def process_query(query: str, language: str, bot_mode: str) -> RagResult:
 
 
 async def _embed_query(query: str) -> List[float]:
-    """Generates embedding using HuggingFace feature-extraction pipeline."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2",
-            headers=_get_hf_headers(),
-            json={"inputs": query},
-        )
-        response.raise_for_status()
-        result = response.json()
-        # Returns nested list — flatten if needed
-        if isinstance(result[0], list):
-            return result[0]
-        return result
+    """Generates embedding locally using sentence-transformers."""
+    loop = asyncio.get_event_loop()
+    model = _get_embed_model()
+    embedding = await loop.run_in_executor(
+        None,
+        lambda: model.encode(query, normalize_embeddings=True).tolist(),
+    )
+    return embedding
 
 
 async def retrieve_context(query_embedding: List[float]) -> List[dict]:
@@ -128,7 +130,7 @@ async def call_llm(context: str, query: str, bot_mode: str) -> str:
 
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(
-            f"{HF_API_URL}/{CHAT_MODEL}",
+            f"https://api-inference.huggingface.co/models/{CHAT_MODEL}",
             headers=_get_hf_headers(),
             json={
                 "inputs": full_prompt,
@@ -136,7 +138,7 @@ async def call_llm(context: str, query: str, bot_mode: str) -> str:
                     "max_new_tokens": 512,
                     "temperature": 0.1,
                     "return_full_text": False,
-                }
+                },
             },
         )
         response.raise_for_status()
