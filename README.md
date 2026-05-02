@@ -1,7 +1,7 @@
 # ECI Election Information Bot
 
 A RAG-based web app that answers Indian voter queries using official ECI documents.
-Built at ₹0 using HuggingFace (DeepSeek-V3 + MiniLM), Pinecone, Supabase, Next.js 14, and FastAPI.
+Built at ₹0 using Gemini 2.5 Flash, sentence-transformers (MiniLM), Pinecone, Supabase, Next.js 14, and FastAPI.
 
 ---
 
@@ -13,21 +13,21 @@ election-bot/
 └── backend/    → Python FastAPI (deploy to Render)
 ```
 
-**Flow:** User sends a question → FastAPI embeds it locally (MiniLM) → queries Pinecone for relevant ECI document chunks → DeepSeek-V3 generates a grounded answer → response returned to the chat UI.
+**Flow:** User sends a question → FastAPI embeds it locally (MiniLM) → queries Pinecone for relevant ECI document chunks → Gemini 2.5 Flash generates a grounded answer → response returned to the chat UI.
 
 ---
 
 ## Tech Stack
 
-| Layer      | Technology                                     | Cost                |
-| ---------- | ---------------------------------------------- | ------------------- |
-| Frontend   | Next.js 14, TypeScript, Tailwind CSS           | ₹0 (Firebase free)  |
-| Backend    | Python FastAPI                                 | ₹0 (Render free)    |
-| LLM        | DeepSeek-V3 via HuggingFace Inference API      | ₹0 (free tier)      |
-| Embeddings | sentence-transformers/all-MiniLM-L6-v2 (local) | ₹0                  |
-| Vector DB  | Pinecone Serverless (384 dimensions, cosine)   | ₹0 (1 index free)   |
-| Database   | Supabase                                       | ₹0 (500MB free)     |
-| Hosting    | Firebase Hosting + Render                      | ₹0 (both free tier) |
+| Layer      | Technology                                               | Cost                |
+| ---------- | -------------------------------------------------------- | ------------------- |
+| Frontend   | Next.js 14, TypeScript, Tailwind CSS                     | ₹0 (Firebase free)  |
+| Backend    | Python FastAPI                                           | ₹0 (Render free)    |
+| LLM        | Gemini 2.5 Flash via Google AI Studio                    | ₹0 (free tier)      |
+| Embeddings | sentence-transformers/all-MiniLM-L6-v2 (local, 384 dims) | ₹0                  |
+| Vector DB  | Pinecone Serverless (384 dimensions, cosine)             | ₹0 (1 index free)   |
+| Database   | Supabase                                                 | ₹0 (500MB free)     |
+| Hosting    | Firebase Hosting + Render                                | ₹0 (both free tier) |
 
 ---
 
@@ -35,7 +35,8 @@ election-bot/
 
 - Python 3.11+
 - Node.js 18+
-- A HuggingFace account → [huggingface.co](https://huggingface.co)
+- A Google AI Studio account → [aistudio.google.com](https://aistudio.google.com)
+- A HuggingFace account → [huggingface.co](https://huggingface.co) (for translation only)
 - A Pinecone account → [pinecone.io](https://pinecone.io)
 - A Supabase account → [supabase.com](https://supabase.com)
 - Firebase CLI → `npm install -g firebase-tools`
@@ -68,7 +69,7 @@ cp .env.example .env
 ```bash
 cd frontend
 npm install
-# Create .env.local — set NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+# Create .env.local and set NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
 ### 4. Supabase table setup
@@ -109,8 +110,8 @@ Create an index with:
 
 ### 6. Ingest ECI documents
 
-> **Windows users:** Run ingestion on Google Colab due to a numpy/torch incompatibility.
-> See the Ingestion section below.
+> **Windows users:** Run ingestion on Google Colab due to a numpy/torch
+> incompatibility on Windows. See the Ingestion section below.
 
 ```bash
 cd backend
@@ -143,7 +144,8 @@ Open [http://localhost:3000/chat](http://localhost:3000/chat)
 ### backend/.env
 
 ```env
-PINECONE_API_KEY=
+GEMINI_API_KEY=             # From aistudio.google.com → Get API Key
+PINECONE_API_KEY=           # From Pinecone console
 PINECONE_INDEX_NAME=election-bot
 SUPABASE_URL=               # Supabase Project Settings → General
 SUPABASE_ANON_KEY=          # Supabase Project Settings → API → Legacy anon key
@@ -190,7 +192,11 @@ print(result.stdout)
 print(result.stderr)
 ```
 
-For adding new documents later, use `--incremental` to skip already-ingested vectors.
+For adding new documents later, use `--incremental` to skip already-ingested vectors:
+
+```bash
+python3 ingest.py --docs ./ --incremental
+```
 
 ---
 
@@ -308,7 +314,9 @@ election-bot/
 
 ## Supported Languages
 
-English · हिन्दी · বাংলা · தமிழ் · తెలుగు · മലയാളം · অসমীয়া
+English · हिन्दी · বাংলা · தமிழ் · తెలుగు · മലയാളം · অসমీয়া
+
+Language is auto-detected from the user's query. Responses are returned in the same language.
 
 ---
 
