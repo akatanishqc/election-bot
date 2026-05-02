@@ -11,6 +11,3 @@ pytest==8.2.2
 pytest-asyncio==0.23.7
 huggingface-hub==0.23.4
 sentence-transformers==3.3.1
-tokenizers==0.20.3
-torch==2.2.2
-transformers==4.46.3
