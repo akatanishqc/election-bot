@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass, field
 from typing import List
 
-import httpx
+import google.generativeai as genai
 from sentence_transformers import SentenceTransformer
 
 from ..dependencies import get_pinecone_index
@@ -19,10 +19,9 @@ from ..prompts.system_prompt import (
     RESTRICTED_SYSTEM_PROMPT,
 )
 
-SIMILARITY_THRESHOLD = 0.75
+SIMILARITY_THRESHOLD = 0.3
 TOP_K = 5
 PINECONE_NAMESPACE = "eci_docs"
-CHAT_MODEL = "deepseek-ai/DeepSeek-V3"
 
 _embed_model: SentenceTransformer | None = None
 
@@ -32,10 +31,6 @@ def _get_embed_model() -> SentenceTransformer:
     if _embed_model is None:
         _embed_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
     return _embed_model
-
-
-def _get_hf_headers() -> dict:
-    return {"Authorization": f"Bearer {os.environ.get('HUGGINGFACE_API_KEY', '')}"}
 
 
 @dataclass
@@ -68,7 +63,6 @@ async def process_query(query: str, language: str, bot_mode: str) -> RagResult:
 
 
 async def _embed_query(query: str) -> List[float]:
-    """Generates embedding locally using sentence-transformers."""
     loop = asyncio.get_event_loop()
     model = _get_embed_model()
     embedding = await loop.run_in_executor(
@@ -117,35 +111,30 @@ def build_context_string(chunks: List[dict]) -> str:
 
 
 async def call_llm(context: str, query: str, bot_mode: str) -> str:
-    """Calls DeepSeek-V3 via HuggingFace Inference API."""
+    """Calls Gemini 2.5 Flash via Google AI Studio."""
     system_prompt = (
         RESTRICTED_SYSTEM_PROMPT if bot_mode == "RESTRICTED" else FULL_SYSTEM_PROMPT
     )
-
     full_prompt = (
         f"{system_prompt}\n\n"
         f"[CONTEXT]\n{context}\n\n"
         f"[USER QUERY]\n{query}"
     )
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            f"https://api-inference.huggingface.co/models/{CHAT_MODEL}",
-            headers=_get_hf_headers(),
-            json={
-                "inputs": full_prompt,
-                "parameters": {
-                    "max_new_tokens": 512,
-                    "temperature": 0.1,
-                    "return_full_text": False,
-                },
-            },
-        )
-        response.raise_for_status()
-        result = response.json()
-        if isinstance(result, list):
-            return result[0].get("generated_text", "").strip()
-        return str(result).strip()
+    loop = asyncio.get_event_loop()
+    genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash",
+        generation_config=genai.GenerationConfig(
+            temperature=0.0,
+            max_output_tokens=512,
+        ),
+    )
+    response = await loop.run_in_executor(
+        None,
+        lambda: model.generate_content(full_prompt),
+    )
+    return response.text.strip()
 
 
 def append_compliance_footer(response: str, sources: List[dict]) -> str:
